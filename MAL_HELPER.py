@@ -12,7 +12,7 @@ from urllib.request import urlopen
 site = 'https://myanimelist.net'
 
 # write the name of the user profile
-user = 'XuT'
+user = 'user'
 
 # check lists on types. values: True = check, False = uncheck
 flag_manga = True
