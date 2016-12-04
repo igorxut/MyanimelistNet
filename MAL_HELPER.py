@@ -1,114 +1,290 @@
 # !/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import datetime
 import requests
 import time
 from collections import deque
+from datetime import datetime
 from lxml import etree, html
 from urllib.request import urlopen
 
 
-site = 'https://myanimelist.net'
+def write_log(f_file, f_text):
 
-# write the name of the user profile
-user = 'user'
-
-# check lists on types. values: True = check, False = uncheck
-flag_manga = True
-flag_anime = True
-
-# check on deep. values: True = check, False = uncheck
-flag_deep = True
+    with open(f_file, "ab") as f:
+        f.write(f_text.encode("utf8"))
+        f.write("\n".encode("utf8"))
 
 
-class Task(object):
+def get_list(f_list, f_user, f_site, f_file):
 
-    def __init__(self, link):
-        self.link = link
+    for item_type in (
+            "anime",
+            "manga",
+    ):
+
+        link = "{0}/malappinfo.php?u={1}&status=all&type={2}".format(
+            f_site,
+            f_user,
+            item_type,
+        )
+        tree = etree.parse(urlopen(link))
+        root_xml = tree.getroot()
+        log_text = "{0}\tparsing of xml from url \"{1}\".".format(
+            datetime.now().time(),
+            link,
+        )
+        print(log_text,)
+
+        for item in root_xml.iter("series_{0}db_id".format(item_type,)):
+
+            try:
+                item_id = int(item.text)
+
+            except ValueError:
+                item_id = item.text
+                log_text = "{0}\t{1}_id={2} is not int.\tValueError".format(
+                    datetime.now().time(),
+                    item_type,
+                    item_id,
+                )
+                write_log(f_file, log_text)
+
+            f_list.append((item_type, item_id,))
+            log_text = "{0}\tadded {1}_id={2} to list.".format(
+                datetime.now().time(),
+                item_type,
+                item_id,
+            )
+            print(log_text,)
+
+        log_text = "{0}\tparsing of {1} list is complete.".format(
+            datetime.now().time(),
+            item_type,
+        )
+        print(log_text,)
+
+    log_text = "{0}\tgetting list is complete.".format(
+        datetime.now().time(),
+    )
+    print(log_text,)
+
+    return f_list
 
 
-def log_time():
-    return datetime.datetime.now().strftime('%H:%M:%S')
+def get_page(f_site, f_task, f_file):
+
+    link = "{0}/{1}/{2}/".format(
+        f_site,
+        f_task[0],
+        f_task[1],
+    )
+    page = requests.get(
+        link
+    )
+
+    # error 404 (not found)
+    if page.status_code == 404:
+        log_text = "{0}\tpage \"{1}\" not found.\tpage not found".format(
+            datetime.now().time(),
+            link,
+        )
+        print(
+            log_text,
+        )
+        write_log(
+            f_file,
+            log_text
+        )
+        return None
+
+    # error 429 (too many requests)
+    counter = 0
+    while page.status_code == 429:
+
+        if counter == 9:
+            log_text = "{0}\tpage \"{1}\" not returned 10 times.\tpage not returned".format(
+                datetime.now().time(),
+                link,
+            )
+            write_log(
+                f_file,
+                log_text
+            )
+            break
+
+        counter += 1
+        log_text = "{0}\tpage \"{1}\" not returned. Repeat GET request in 5 seconds.".format(
+            datetime.now().time(),
+            link,
+        )
+        print(
+            log_text,
+        )
+        time.sleep(
+            5
+        )
+        page = requests.get(
+            link
+        )
+
+    return page
 
 
-def get_links(list_type, pass_str):
+def parse_page(
+        f_page,
+        f_file
+):
 
-    queue = deque()
-    initial_list = list()
+    root_html = html.fromstring(
+        f_page.content
+    )
+    f_set = set()
+
+    for attr in root_html.xpath(
+            '//table[@class="anime_detail_related_anime"]//a/@href'
+    ):
+
+        f_list = attr.split(
+            '/'
+        )
+        item_type = f_list[1]
+
+        try:
+            item_id = int(
+                f_list[2]
+            )
+
+        except ValueError:
+
+            if f_list[2] == "":
+                continue
+
+            item_id = f_list[2]
+            log_text = "{0}\t{1}_id={2} is not int.\tValueError".format(
+                datetime.now().time(),
+                item_type,
+                item_id,
+            )
+            write_log(
+                f_file,
+                log_text
+            )
+
+        task = (
+            item_type,
+            item_id,
+        )
+        f_set.add(
+            task
+        )
+
+    return f_set
+
+
+def main(user):
+
+    site = "https://myanimelist.net"
+
+    user_list = list()
     visited_set = set()
-    resulted_set = set()
+    queue = deque()
 
-    # parse xml document
-    tree = etree.parse(urlopen('{0}/malappinfo.php?u={1}&status=all&type={2}'.format(site, user, list_type)))
-    root_xml = tree.getroot()
+    file_result = "result.tsv"
+    file_error_log = "errors.tsv"
 
-    print(u'{0} - get ids of {1}list links.'.format(log_time(), list_type))
+    result_file = open(
+        file_result,
+        "wb"
+    )
+    result_file.close()
+    error_log_file = open(
+        file_error_log,
+        "wb"
+    )
+    error_log_file.close()
 
-    # add links from xml to queue
-    for item in root_xml.iter('series_{0}db_id'.format(list_type)):
-        initial_list.append('{0}/{1}/{2}/'.format(site, list_type, item.text))
-        queue.append(Task('{0}/{1}/{2}/'.format(site, list_type, item.text)))
-
-    print('{0} - added {1} links to initial_list of {2}.'.format(log_time(), len(initial_list), list_type))
+    user_list.extend(
+        get_list(
+            user_list,
+            user,
+            site,
+            file_error_log
+        )
+    )
+    queue.extend(
+        user_list
+    )
 
     while queue:
 
         task = queue.popleft()
 
-        if task.link in visited_set:
+        if task in visited_set:
             continue
 
-        visited_set.add(task.link)
-        print('{0} - get page \"{1}\".'.format(log_time(), task.link))
-        buffer_page = requests.get(task.link)
+        if task not in user_list:
+            log_text = "{0}\t{1} added to result_set.".format(
+                datetime.now().time(),
+                task,
+            )
+            print(
+                log_text
+            )
+            log_text = "{0}\t{1}\t{2}/{0}/{1}/".format(
+                task[0],
+                task[1],
+                site,
+            )
+            write_log(
+                file_result,
+                log_text
+            )
 
-        # error 404 (not found)
-        if buffer_page.status_code == 404:
-            print('{0} - page \"{1}\" not found.'.format(log_time(), task.link))
+        visited_set.add(task)
+        log_text = "{0}\t{1} added to visited_set.".format(
+            datetime.now().time(),
+            task,
+        )
+        print(
+            log_text,
+        )
+
+        page = get_page(
+            site,
+            task,
+            file_error_log
+        )
+
+        if page is None:
             continue
 
-        # error 429 (too many requests)
-        while buffer_page.status_code == 429:
-            print('{0} - page \"{1}\" not returned. Repeat GET request.'.format(log_time(), task.link))
-            time.sleep(5)
-            buffer_page = requests.get(task.link)
+        else:
+            urls_set = parse_page(
+                page,
+                file_error_log
+            )
 
-        # parse html document
-        root_html = html.fromstring(buffer_page.content)
+        for item in urls_set:
 
-        for attr in root_html.xpath('//table[@class="anime_detail_related_anime"]//a/@href'):
+            if item not in visited_set:
+                queue.append(
+                    item
+                )
+                log_text = "{0}\t{1} added to queue.".format(
+                    datetime.now().time(),
+                    item,
+                )
+                print(
+                    log_text
+                )
 
-            if ('{0}'.format(attr) != '/anime//') and ('{0}'.format(attr) != '/manga//'):
-                buffer_link = '{0}/{1}/{2}/'.format(site, list_type, attr.split('/')[-2])
-                print('{0} - check link \"{1}\" to add.'.format(log_time(), buffer_link))
+    log_text = "{0}\tqueue is empty, mission complete.".format(
+        datetime.now().time()
+    )
+    print(log_text)
 
-                if (
-                       (pass_str not in buffer_link) and
-                       (buffer_link not in initial_list) and
-                       (buffer_link not in resulted_set)
-                ):
-                    resulted_set.add(buffer_link)
+    return None
 
-                    print('{0} - link \"{1}\" added to the resulted_set.'.format(log_time(), buffer_link))
-
-                    if flag_deep:
-                        queue.append(Task(buffer_link))
-
-                else:
-                    print('{0} - link \"{1}\" not added to the resulted_set.'.format(log_time(), buffer_link))
-
-    return resulted_set
-
-
-with open('result.txt', 'wb') as file:
-
-    if flag_manga:
-        file.write('MANGALIST:\n'.encode('utf8'))
-        file.write('\n'.join(get_links('manga', '{0}/anime/'.format(site))).encode('utf8'))
-        file.write('\n'.encode('utf8'))
-
-    if flag_anime:
-        file.write('ANIMELIST:\n'.encode('utf8'))
-        file.write('\n'.join(get_links('anime', '{0}/manga/'.format(site))).encode('utf8'))
-        file.write('\n'.encode('utf8'))
+if __name__ == "__main__":
+    main("XuT")
